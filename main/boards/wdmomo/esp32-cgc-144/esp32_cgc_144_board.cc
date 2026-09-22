@@ -132,7 +132,7 @@ void InitializePowerManager() {
 
         asr_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            std::string wake_word="你好小智";
+            std::string wake_word="你好Pico";
             Application::GetInstance().WakeWordInvoke(wake_word);
         });
     }

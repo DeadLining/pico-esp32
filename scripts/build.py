@@ -1377,6 +1377,28 @@ def _configure_build(
     _sync_vscode_target(target)
 
 
+def _patch_idf6_component_compatibility() -> None:
+    """Apply narrow compatibility fixes to managed components after resolution.
+
+    ESP-IDF 6.1 renamed the GDMA alignment helper, while older published
+    78/uart-uhci releases still call the former symbol.  Dependency resolution
+    happens during reconfigure, so this patch must run after that step and
+    before the compile step.
+    """
+    component = Path("managed_components/78__uart-uhci/src/uart_uhci.cc")
+    if not component.exists():
+        return
+    content = component.read_text(encoding="utf-8")
+    old = "gdma_get_alignment_constraints(rx_dma_chan_, &rx_int_mem_align_, &rx_ext_mem_align_);"
+    new = """gdma_channel_alignment_info_t rx_align_info{};
+    ESP_RETURN_ON_ERROR(gdma_get_channel_alignment_constraints(rx_dma_chan_, &rx_align_info), kTag, "RX DMA alignment query failed");
+    rx_int_mem_align_ = rx_align_info.int_mem_alignment;
+    rx_ext_mem_align_ = rx_align_info.ext_enc_mem_alignment;"""
+    if old in content and new not in content:
+        component.write_text(content.replace(old, new), encoding="utf-8")
+        print("[INFO] Applied ESP-IDF 6.x compatibility patch to 78__uart-uhci.")
+
+
 def _validate_configured_symbols(symbols: list[str], option_name: str) -> None:
     """Ensure Kconfig accepted every user-selected build option."""
     if not symbols:
@@ -1592,6 +1614,7 @@ def build_board(
             name,
             preview,
         )
+        _patch_idf6_component_compatibility()
         for symbols, option_name in validation_symbols:
             _validate_configured_symbols(symbols, option_name)
         _validate_configured_options(build_option_sdkconfig, "--build-options-json")

@@ -26,7 +26,7 @@
  * 
  * 在设备启动早期检测GPIO39和GPIO18是否同时被按下（持续500ms），
  * 如果检测到则切换到另一个OTA分区并重启设备。
- * 用于在小智固件和Zectrix固件之间切换。
+ * 用于在 Pico 固件和 Zectrix 固件之间切换。
  */
 static void CheckDualButtonForOtaSwitch() {
     // 配置按钮GPIO为输入，启用上拉

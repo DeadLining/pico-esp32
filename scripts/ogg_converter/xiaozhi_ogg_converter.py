@@ -8,7 +8,7 @@ import ffmpeg
 class AudioConverterApp:
     def __init__(self, master):
         self.master = master
-        master.title("小智AI OGG音频批量转换工具")
+        master.title("Pico OGG 音频批量转换工具")
         master.geometry("680x600")  # 调整窗口高度
 
         # 初始化变量

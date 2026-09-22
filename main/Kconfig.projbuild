@@ -1,8 +1,8 @@
-menu "Xiaozhi Assistant"
+menu "Pico Assistant"
 
 config OTA_URL
     string "Default OTA URL"
-    default "https://api.tenclass.net/xiaozhi/ota/"
+    default "http://82.157.168.149/pico/ota/"
     help
         The application will access this URL to check for new firmwares and server address.
 
@@ -612,7 +612,7 @@ choice BOARD_TYPE
         bool "XOrigin AiPi-Lite"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_YUNLIAO_S3
-        bool "Yunliao S3 (小智云聊)"
+        bool "Yunliao S3"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2
         bool "Zectrix S3 ePaper 4.2"
@@ -852,7 +852,7 @@ choice DISPLAY_STYLE
     prompt "Select display style"
     default USE_DEFAULT_MESSAGE_STYLE
     help
-        Select display style for Xiaozhi device
+        Select display style for Pico device
 
     config USE_DEFAULT_MESSAGE_STYLE
         bool "Enable default message style"

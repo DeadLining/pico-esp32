@@ -6,8 +6,8 @@ FROM ${IDF_IMAGE}
 ARG FIRMWARE_SOURCE_REVISION=unknown
 ARG FIRMWARE_SOURCE_URL=https://github.com/78/xiaozhi-esp32
 
-LABEL org.opencontainers.image.title="XiaoZhi firmware builder" \
-      org.opencontainers.image.description="Builds one XiaoZhi board configuration with a selected language and wake word" \
+LABEL org.opencontainers.image.title="Pico firmware builder" \
+      org.opencontainers.image.description="Builds one Pico board configuration with a selected language and wake word" \
       org.opencontainers.image.source="${FIRMWARE_SOURCE_URL}" \
       org.opencontainers.image.revision="${FIRMWARE_SOURCE_REVISION}"
 
@@ -19,6 +19,7 @@ COPY . .
 RUN chmod 0755 \
       docker/firmware-builder/entrypoint.sh \
       docker/firmware-builder/firmware_builder.py \
+      docker/firmware-builder/server.py \
     && . "${IDF_PATH}/export.sh" >/dev/null \
     && idf.py --version \
     && python3 scripts/build.py --list-boards --json >/tmp/xiaozhi-boards.json \
