@@ -47,7 +47,7 @@ source and records the derived `board_type` before starting a build.
 
 Each successful job writes:
 
-- `xiaozhi.bin`: application/OTA image;
+- `pico.bin`: application/OTA image;
 - `merged-binary.bin`: full flash image;
 - `build.log`: complete compiler output;
 - `manifest.json`: inputs, tool versions, source revision, sizes, and SHA-256

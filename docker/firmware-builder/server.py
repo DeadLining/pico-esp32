@@ -5,8 +5,54 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 ROOT=Path(os.environ.get('FIRMWARE_SOURCE_DIR','/opt/pico-esp32')).resolve(); OUT=Path(os.environ.get('FIRMWARE_OUTPUT_DIR','/output')).resolve(); JOBS={}; LOCK=threading.Lock(); ACTIVE=set()
 
+# Directories that never describe the firmware source: build intermediates,
+# vendored components fetched at configure time, and VCS/tool metadata. Walking
+# them would make the fingerprint depend on machine-local state.
+_FINGERPRINT_SKIP={'build','managed_components','.git','__pycache__','.codegraph','.cache','.venv'}
+# Build-generated files that live inside the source tree. `idf.py reconfigure`
+# rewrites sdkconfig/sdkconfig.old and the component manager rewrites
+# dependencies.lock, while build.py regenerates lang_config.h. They are ignored
+# by git for exactly this reason, and letting them into the fingerprint made
+# every build invalidate its own cache entry.
+_FINGERPRINT_SKIP_FILES={'sdkconfig','sdkconfig.old','dependencies.lock','main/assets/lang_config.h'}
+_FINGERPRINT={'value':None,'at':0.0,'ttl':5.0}
+
+def source_fingerprint():
+  """Content identity of the firmware tree, independent of the git revision.
+
+  The image is built from the working tree, not from a commit, so a revision
+  string alone cannot tell whether local edits went into the binary.
+
+  This hashes file contents rather than mtimes on purpose: restoring a file
+  byte-for-byte (a `git checkout`, a copy back from backup) leaves the content
+  identical but changes mtime, and an mtime-based key would needlessly discard a
+  valid cache entry. Reading the tree costs ~1-2s against a multi-minute build,
+  and the result is memoized briefly so a burst of requests walks it once.
+
+  Combined with, not replacing, the reported revision: the revision still
+  distinguishes two checkouts that happen to have identical contents.
+  """
+  now=time.time()
+  if _FINGERPRINT['value'] is not None and now-_FINGERPRINT['at'] < _FINGERPRINT['ttl']:
+    return _FINGERPRINT['value']
+  digest=hashlib.sha256()
+  try:
+    for path in sorted(ROOT.rglob('*')):
+      rel=path.relative_to(ROOT)
+      if any(part in _FINGERPRINT_SKIP for part in rel.parts): continue
+      if rel.as_posix() in _FINGERPRINT_SKIP_FILES: continue
+      if not path.is_file(): continue
+      digest.update(rel.as_posix().encode()); digest.update(b'\0')
+      digest.update(path.read_bytes()); digest.update(b'\0')
+    value=digest.hexdigest()[:32]
+  except OSError:
+    # A tree we cannot walk must not silently reuse a stale fingerprint.
+    return 'unknown'
+  _FINGERPRINT.update(value=value, at=now)
+  return value
+
 def cache_key(body):
-  payload={'source_revision':os.environ.get('FIRMWARE_SOURCE_REVISION','unknown'),'board':body['board'],'name':body['name'],'target':body['target'],'language':body['language'],'wake_word':body['wake_word'],'build_options':body.get('build_options') or {}}
+  payload={'source_revision':os.environ.get('FIRMWARE_SOURCE_REVISION','unknown'),'source_fingerprint':source_fingerprint(),'board':body['board'],'name':body['name'],'target':body['target'],'language':body['language'],'wake_word':body['wake_word'],'build_options':body.get('build_options') or {}}
   return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
 
 def now_iso():

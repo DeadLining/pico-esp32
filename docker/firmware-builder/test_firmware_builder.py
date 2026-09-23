@@ -44,7 +44,7 @@ print("fake compiler output")
 if %d == 0:
     build = pathlib.Path("build")
     build.mkdir(exist_ok=True)
-    (build / "xiaozhi.bin").write_bytes(b"ota")
+    (build / "pico.bin").write_bytes(b"ota")
     (build / "merged-binary.bin").write_bytes(b"full")
 sys.exit(%d)
 """
@@ -79,7 +79,7 @@ sys.exit(%d)
                 )
 
             self.assertEqual(exit_code, 0)
-            self.assertEqual((output / "xiaozhi.bin").read_bytes(), b"ota")
+            self.assertEqual((output / "pico.bin").read_bytes(), b"ota")
             self.assertEqual((output / "merged-binary.bin").read_bytes(), b"full")
             self.assertIn("fake compiler output", (output / "build.log").read_text())
             manifest = json.loads((output / "manifest.json").read_text())

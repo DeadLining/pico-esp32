@@ -317,6 +317,80 @@ class FirmwareBuilderHistoryTest(unittest.TestCase):
         os.environ['FIRMWARE_SOURCE_REVISION'] = 'other'
         self.assertNotEqual(k1, self.server.cache_key(body))
 
+    def test_editing_a_source_file_changes_the_cache_key(self):
+        # The image is built from the working tree, so an uncommitted edit must
+        # invalidate the cache even when FIRMWARE_SOURCE_REVISION is unchanged.
+        body = {'board': 'b', 'name': 'n', 'target': 'esp32c3',
+                'language': 'zh-CN', 'wake_word': 'w', 'build_options': {}}
+        board = self.root / 'main' / 'boards' / 'demo'
+        board.mkdir(parents=True)
+        source = board / 'board.cc'
+        source.write_text('int version = 1;\n')
+
+        k1 = self.server.cache_key(body)
+        self.server._FINGERPRINT['at'] = 0.0  # bypass the short-lived memo
+        self.assertEqual(k1, self.server.cache_key(body),
+                         'an unchanged tree must keep the same key')
+
+        source.write_text('int version = 2;\n')
+        self.server._FINGERPRINT['at'] = 0.0
+        self.assertNotEqual(k1, self.server.cache_key(body),
+                            'a changed source file must invalidate the cache')
+
+    def test_fingerprint_ignores_build_and_vendor_directories(self):
+        # Build outputs and fetched components are machine-local, so churning
+        # them must not invalidate a cache entry.
+        body = {'board': 'b', 'name': 'n', 'target': 'esp32c3',
+                'language': 'zh-CN', 'wake_word': 'w', 'build_options': {}}
+        (self.root / 'main').mkdir(parents=True)
+        (self.root / 'main' / 'app.cc').write_text('int main(){}\n')
+        k1 = self.server.cache_key(body)
+
+        for ignored in ('build', 'managed_components', '.git'):
+            d = self.root / ignored
+            d.mkdir(parents=True, exist_ok=True)
+            (d / 'artifact.bin').write_bytes(b'noise')
+        self.server._FINGERPRINT['at'] = 0.0
+        self.assertEqual(k1, self.server.cache_key(body))
+
+    def test_restoring_identical_content_keeps_the_cache_key(self):
+        # Content hashing, not mtime: restoring a file byte-for-byte changes its
+        # mtime but must not throw away an otherwise valid cache entry.
+        body = {'board': 'b', 'name': 'n', 'target': 'esp32c3',
+                'language': 'zh-CN', 'wake_word': 'w', 'build_options': {}}
+        src = self.root / 'main' / 'app.cc'
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text('int value = 7;\n')
+        k1 = self.server.cache_key(body)
+
+        os.utime(src, (1, 1))  # same bytes, different timestamps
+        self.server._FINGERPRINT['at'] = 0.0
+        self.assertEqual(k1, self.server.cache_key(body))
+
+    def test_fingerprint_ignores_build_generated_source_files(self):
+        # `idf.py reconfigure` rewrites sdkconfig/sdkconfig.old and the component
+        # manager rewrites dependencies.lock; build.py regenerates
+        # lang_config.h. They sit inside the source tree, so without an explicit
+        # skip list every build would invalidate its own cache entry.
+        body = {'board': 'b', 'name': 'n', 'target': 'esp32c3',
+                'language': 'zh-CN', 'wake_word': 'w', 'build_options': {}}
+        (self.root / 'main' / 'assets').mkdir(parents=True, exist_ok=True)
+        (self.root / 'main' / 'app.cc').write_text('int main(){}\n')
+        k1 = self.server.cache_key(body)
+
+        (self.root / 'sdkconfig').write_text('# regenerated\n')
+        (self.root / 'sdkconfig.old').write_text('# regenerated\n')
+        (self.root / 'dependencies.lock').write_text('{}')
+        (self.root / 'main' / 'assets' / 'lang_config.h').write_text('#pragma once\n')
+        self.server._FINGERPRINT['at'] = 0.0
+        self.assertEqual(k1, self.server.cache_key(body))
+
+    def test_fingerprint_is_stable_across_repeated_calls(self):
+        first = self.server.source_fingerprint()
+        self.server._FINGERPRINT['at'] = 0.0
+        self.assertEqual(first, self.server.source_fingerprint())
+        self.assertNotEqual(first, 'unknown')
+
 
 if __name__ == '__main__':
     unittest.main()

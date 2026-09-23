@@ -22,8 +22,8 @@ RUN chmod 0755 \
       docker/firmware-builder/server.py \
     && . "${IDF_PATH}/export.sh" >/dev/null \
     && idf.py --version \
-    && python3 scripts/build.py --list-boards --json >/tmp/xiaozhi-boards.json \
-    && python3 scripts/build.py --list-languages --json >/tmp/xiaozhi-languages.json
+    && python3 scripts/build.py --list-boards --json >/tmp/pico-boards.json \
+    && python3 scripts/build.py --list-languages --json >/tmp/pico-languages.json
 
 ENV FIRMWARE_SOURCE_DIR=/opt/xiaozhi-esp32 \
     FIRMWARE_OUTPUT_DIR=/output \
