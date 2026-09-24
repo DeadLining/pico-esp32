@@ -202,10 +202,27 @@ def delete_build(job_id):
 
 def safe(v, pattern): return isinstance(v,str) and re.fullmatch(pattern,v) and '..' not in Path(v).parts
 
+COMPILE_LOCK = threading.Lock()
+
+def clean_compile_workspace():
+  # Ninja uses mtimes. A source copied with an older timestamp can otherwise
+  # yield an old binary under a NEW content cache key. Cache hits never enter
+  # run_job, so only genuine builds discard intermediates; history, downloaded
+  # components and ccache remain reusable.
+  build = ROOT / 'build'
+  if build.exists():
+    shutil.rmtree(build)
+
 def run_job(job, body):
+  # All jobs use one ESP-IDF source/build workspace.
+  with COMPILE_LOCK:
+    _run_job(job, body)
+
+def _run_job(job, body):
   try:
     with LOCK: ACTIVE.add(job['id'])
     job['status']='running'; job['progress']=10; out=OUT/job['id']; out.mkdir(parents=True,exist_ok=True); persist(job)
+    clean_compile_workspace()
     opts=json.dumps(body.get('build_options') or {},ensure_ascii=False)
     cmd=['python3','scripts/build.py',body['board'],'--name',body['name'],'--language',body['language'],'--wake-word',body['wake_word'],'--build-options-json',opts]
     # Stream the compiler output. A first build can spend many minutes fetching

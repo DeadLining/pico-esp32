@@ -52,3 +52,22 @@ independent ADC buttons (the same pattern as the ESP-BOX-Lite).
   pull-up. Re-measure with the Button page if thresholds drift.
 - CW2017 presence is optional; without the chip the status bar shows no
   battery level and the board keeps working.
+
+### Estimated charging indicator
+
+Pico estimates charging from CW2017 voltage; no hardware charge-status signal has
+been verified. The battery keeps its level icon and turns green while the estimate
+is positive. This is a UI heuristic, never a charging-control or protection input.
+
+- Read at most once every 5 seconds, retaining 6 voltage samples.
+- Compare the median of the newest 3 samples with the oldest 3. A rise of at least
+  6 mV in two consecutive windows enables green (earliest about 30 seconds).
+- A median drop of at least 4 mV clears green. With no renewed rising evidence,
+  green expires after 45 seconds (up to roughly 70 seconds after a plateau starts).
+- Invalid reads or sampling gaps over 10 seconds reset the estimate. Startup and
+  unknown state use the normal theme color. Only estimate transitions are logged.
+
+Load relaxation may cause a false positive; constant-voltage charging may cause a
+false negative. A flat high voltage, USB connection, and SOC alone are not treated
+as proof of charging or full charge. The thresholds are provisional, not calibrated
+against measured charging current.

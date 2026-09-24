@@ -6,6 +6,7 @@
 #include "config.h"
 #include "assets/lang_config.h"
 #include "cw2017_battery_monitor.h"
+#include "battery_charge_estimator.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -18,6 +19,7 @@
 #include <freertos/task.h>
 
 #include <atomic>
+#include <mutex>
 
 #define TAG "AiPassport"
 
@@ -46,6 +48,8 @@ private:
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     LcdDisplay* display_;
     Cw2017BatteryMonitor* battery_;
+    BatteryChargeEstimator charge_estimator_;
+    std::mutex battery_mutex_;
 
     // Idle-timer screen blanking. The flag is shared between the esp_timer task
     // (countdown), the button task (callbacks) and the main task (applying the
@@ -361,6 +365,8 @@ private:
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                      DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
                                      DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_->SetBatteryChargingColor(0x22C55E);
+        display_->ShowBatteryPercentage();
     }
 
 public:
@@ -399,18 +405,27 @@ public:
     }
 
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        std::lock_guard<std::mutex> lock(battery_mutex_);
         if (!battery_ || !battery_->IsPresent()) {
             return false;
         }
         int soc = battery_->GetBatteryLevel();
         if (soc < 0) {
+            charge_estimator_.Update(esp_timer_get_time() / 1000, -1);
             return false;
         }
         level = soc;
-        // CW2017 reports no charge state and the Passport has no charge-detect
-        // GPIO, so report a plain (discharging) reading.
-        charging = false;
-        discharging = true;
+        const auto now_ms = esp_timer_get_time() / 1000;
+        if (charge_estimator_.Due(now_ms)) {
+            const bool previous = charge_estimator_.IsCharging();
+            charge_estimator_.Update(now_ms, battery_->GetBatteryVoltageMv());
+            if (previous != charge_estimator_.IsCharging()) {
+                ESP_LOGI(TAG, "Estimated charging: %s (voltage trend, not hardware status)",
+                         charge_estimator_.IsCharging() ? "yes" : "no");
+            }
+        }
+        charging = charge_estimator_.IsCharging();
+        discharging = !charging;
         return true;
     }
 };

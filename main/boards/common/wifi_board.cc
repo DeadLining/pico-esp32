@@ -9,8 +9,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_network.h>
+#include <esp_netif_sntp.h>
 #include <esp_log.h>
 #include <esp_mac.h>
+#include <time.h>
+#include <sys/time.h>
 #include <utility>
 
 #include <material_symbols.h>
@@ -25,6 +28,9 @@ static const char *TAG = "WifiBoard";
 
 // Connection timeout in seconds
 static constexpr int CONNECT_TIMEOUT_SEC = 60;
+static constexpr int TIME_SYNC_HOUR = 9;
+static constexpr int TIME_SYNC_CHECK_INTERVAL_SEC = 30;
+static constexpr int TIME_SYNC_WAIT_SEC = 10;
 
 WifiBoard::WifiBoard() {
     // Create connection timeout timer
@@ -39,9 +45,119 @@ WifiBoard::WifiBoard() {
 }
 
 WifiBoard::~WifiBoard() {
+    StopTimeSync();
     if (connect_timer_) {
         esp_timer_stop(connect_timer_);
         esp_timer_delete(connect_timer_);
+    }
+}
+
+void WifiBoard::TimeSyncTaskEntry(void* arg) {
+    static_cast<WifiBoard*>(arg)->TimeSyncTask();
+    vTaskDelete(nullptr);
+}
+
+void WifiBoard::StartTimeSync() {
+    if (time_sync_task_ == nullptr) {
+        BaseType_t result = xTaskCreate(
+            TimeSyncTaskEntry,
+            "pico_time_sync",
+            4096,
+            this,
+            3,
+            &time_sync_task_);
+        if (result != pdPASS) {
+            time_sync_task_ = nullptr;
+            ESP_LOGE(TAG, "Failed to create daily time sync task");
+            return;
+        }
+    }
+    time_sync_requested_ = true;
+    xTaskNotifyGive(time_sync_task_);
+}
+
+void WifiBoard::StopTimeSync() {
+    if (time_sync_task_ != nullptr) {
+        TaskHandle_t task = time_sync_task_;
+        time_sync_task_ = nullptr;
+        vTaskDelete(task);
+    }
+    if (time_sync_started_) {
+        esp_netif_sntp_deinit();
+        time_sync_started_ = false;
+    }
+    wifi_connected_ = false;
+    time_sync_requested_ = false;
+}
+
+void WifiBoard::SyncNetworkTime(const char* reason) {
+    if (!wifi_connected_) {
+        return;
+    }
+
+    setenv("TZ", "CST-8", 1);
+    tzset();
+
+    if (!time_sync_started_) {
+#if CONFIG_LWIP_SNTP_MAX_SERVERS >= 2
+        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+            2,
+            ESP_SNTP_SERVER_LIST("ntp.aliyun.com", "pool.ntp.org"));
+#else
+        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
+#endif
+        config.wait_for_sync = true;
+        config.start = true;
+        esp_err_t err = esp_netif_sntp_init(&config);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "SNTP init failed (%s): %s", reason, esp_err_to_name(err));
+            return;
+        }
+        time_sync_started_ = true;
+    } else {
+        esp_netif_sntp_start();
+    }
+
+    esp_err_t err = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(TIME_SYNC_WAIT_SEC * 1000));
+    if (err == ESP_OK) {
+        struct timeval now;
+        gettimeofday(&now, nullptr);
+        struct tm local_time;
+        localtime_r(&now.tv_sec, &local_time);
+        ESP_LOGI(TAG, "Time synchronized (%s): %04d-%02d-%02d %02d:%02d:%02d",
+                 reason,
+                 local_time.tm_year + 1900,
+                 local_time.tm_mon + 1,
+                 local_time.tm_mday,
+                 local_time.tm_hour,
+                 local_time.tm_min,
+                 local_time.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "Time synchronization timed out (%s): %s", reason, esp_err_to_name(err));
+    }
+}
+
+void WifiBoard::TimeSyncTask() {
+    for (;;) {
+        // A notification is sent on every Wi-Fi connection.  The initial
+        // synchronization therefore happens immediately instead of waiting
+        // for the first daily 09:00 window.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(TIME_SYNC_CHECK_INTERVAL_SEC * 1000));
+        if (wifi_connected_) {
+            struct timeval now;
+            gettimeofday(&now, nullptr);
+            struct tm local_time;
+            localtime_r(&now.tv_sec, &local_time);
+
+            const bool daily_window = local_time.tm_hour == TIME_SYNC_HOUR && local_time.tm_min == 0;
+            if (time_sync_requested_) {
+                time_sync_requested_ = false;
+                SyncNetworkTime("Wi-Fi connected");
+            } else if (daily_window && last_daily_sync_day_ != local_time.tm_yday) {
+                SyncNetworkTime("daily 09:00");
+                last_daily_sync_day_ = local_time.tm_yday;
+            }
+        }
     }
 }
 
@@ -119,6 +235,8 @@ void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {
         case NetworkEvent::Connected:
             // Stop timeout timer
             esp_timer_stop(connect_timer_);
+            wifi_connected_ = true;
+            StartTimeSync();
 #ifdef CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
             // make sure blufi resources has been released
             Blufi::GetInstance().deinit();
@@ -133,6 +251,7 @@ void WifiBoard::OnNetworkEvent(NetworkEvent event, const std::string& data) {
             ESP_LOGI(TAG, "WiFi connecting to %s", data.c_str());
             break;
         case NetworkEvent::Disconnected:
+            wifi_connected_ = false;
             ESP_LOGW(TAG, "WiFi disconnected");
             break;
         case NetworkEvent::WifiConfigModeEnter:

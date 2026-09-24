@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <ctime>
 #include <expected>
 #include <system_error>
 #include <vector>
@@ -201,9 +204,16 @@ NetworkResult<> Ota::CheckVersion() {
             struct timeval tv;
             double ts = timestamp->valuedouble;
             
-            // 如果有时区偏移，计算本地时间
-            if (cJSON_IsNumber(timezone_offset)) {
-                ts += (timezone_offset->valueint * 60 * 1000); // 转换分钟为毫秒
+            // Keep the epoch in UTC, just like SNTP. Apply the timezone only
+            // when formatting local time; shifting the epoch adds it twice.
+            if (cJSON_IsNumber(timezone_offset) && timezone_offset->valueint >= -840 &&
+                timezone_offset->valueint <= 840) {
+                const int offset = timezone_offset->valueint;
+                char zone[24];
+                snprintf(zone, sizeof(zone), "UTC%s%d:%02d", offset >= 0 ? "-" : "+",
+                         std::abs(offset) / 60, std::abs(offset) % 60);
+                setenv("TZ", zone, 1);
+                tzset();
             }
             
             tv.tv_sec = (time_t)(ts / 1000);  // 转换毫秒为秒

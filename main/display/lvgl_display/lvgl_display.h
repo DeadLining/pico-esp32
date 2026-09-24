@@ -26,6 +26,13 @@ public:
     virtual void ShowNotification(const std::string& notification, int duration_ms = 3000);
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
     virtual void UpdateStatusBar(bool update_all = false);
+    // Optional board setup: retain the level icon and color it while charging.
+    void SetBatteryChargingColor(uint32_t rgb) {
+        battery_charging_color_ = rgb;
+        battery_charging_color_enabled_ = true;
+    }
+    // Configure before the first status update; disabled for other boards.
+    void ShowBatteryPercentage() { battery_percentage_enabled_ = true; }
     virtual void SetPowerSaveMode(bool on);
     virtual bool SnapshotToJpeg(std::string& jpeg_data, int quality = 80) override;
     virtual bool AddTextGlyphs(const std::vector<TextGlyph>& glyphs, uint8_t bpp) override;
@@ -42,9 +49,13 @@ protected:
     lv_obj_t* notification_label_ = nullptr;
     lv_obj_t* mute_label_ = nullptr;
     lv_obj_t* battery_label_ = nullptr;
+    lv_obj_t* battery_percentage_label_ = nullptr;
+    bool battery_percentage_enabled_ = false;
     lv_obj_t* low_battery_popup_ = nullptr;
     lv_obj_t* low_battery_label_ = nullptr;
 
+    bool battery_charging_color_enabled_ = false;
+    uint32_t battery_charging_color_ = 0;
     const char* battery_icon_ = nullptr;
     const char* network_icon_ = nullptr;
     bool muted_ = false;

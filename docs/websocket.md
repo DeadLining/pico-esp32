@@ -536,3 +536,15 @@ This protocol carries JSON text and binary Opus frames over a WebSocket connecti
 - **Extensibility**: extra fields in JSON, additional headers for authentication.
 
 Server and device must agree on the meaning, timing, and error handling of each message type so the session runs smoothly. The text above provides the baseline for integration, debugging, and extension.
+
+### Pico full-duplex playback ordering
+
+Pico sends `tts.start`, binary Opus frames, and `tts.stop` on the same ordered
+WebSocket. `stop` means normal end: the device drains queued audio before leaving
+playback. `{"type":"tts","state":"abort"}` instead invalidates queued and
+in-flight decode work immediately, resets the decoder/resampler, and keeps the
+microphone enabled in realtime mode. It does not echo a client abort upstream.
+A fragment already handed to the physical DAC may finish; it cannot be retracted.
+Each replacement response starts with a new `tts.start`; canceled response deltas
+must be rejected by the server before transmission. Pico input is 16 kHz Opus;
+output uses the rate advertised by the server hello (normally 24 kHz).

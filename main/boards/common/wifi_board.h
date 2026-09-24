@@ -5,12 +5,24 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <esp_timer.h>
+#include <freertos/task.h>
 
 class WifiBoard : public Board {
 protected:
     esp_timer_handle_t connect_timer_ = nullptr;
     bool in_config_mode_ = false;
     NetworkEventCallback network_event_callback_ = nullptr;
+    TaskHandle_t time_sync_task_ = nullptr;
+    volatile bool wifi_connected_ = false;
+    volatile bool time_sync_started_ = false;
+    volatile bool time_sync_requested_ = false;
+    int last_daily_sync_day_ = -1;
+
+    static void TimeSyncTaskEntry(void* arg);
+    void TimeSyncTask();
+    void SyncNetworkTime(const char* reason);
+    void StartTimeSync();
+    void StopTimeSync();
 
     virtual std::string GetBoardJson() override;
 

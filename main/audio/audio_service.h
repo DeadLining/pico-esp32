@@ -193,7 +193,7 @@ private:
     bool decode_in_flight_ = false;
     bool output_in_flight_ = false;
     bool playback_drained_notified_ = true;
-    uint32_t playback_generation_ = 0;
+    std::atomic<uint32_t> playback_generation_{0};
     // For server AEC
     FixedQueue<uint32_t, MAX_TIMESTAMPS_IN_QUEUE> timestamp_queue_;
 

@@ -215,6 +215,11 @@ void Application::Run() {
         if (bits & MAIN_EVENT_PLAYBACK_DRAINED) {
             if (audio_service_.IsPlaybackIdle()) {
                 notify_player_.OnPlaybackDrained();
+                if (pending_playback_stop_ && GetDeviceState() == kDeviceStateSpeaking) {
+                    pending_playback_stop_ = false;
+                    SetDeviceState(listening_mode_ == kListeningModeManualStop
+                                       ? kDeviceStateIdle : kDeviceStateListening);
+                }
             }
             // Deferred listening start (auto mode): the playback queue has
             // drained, so it is now safe to enable voice processing.
@@ -552,9 +557,24 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
-        if (GetDeviceState() == kDeviceStateSpeaking) {
-            audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        // Serialize control messages and audio on the main task. Otherwise
+        // queued START may reset the decoder after its first audio arrived.
+        if (pending_playback_packets_.fetch_add(1) >= 64) {
+            pending_playback_packets_.fetch_sub(1);
+            ESP_LOGW(TAG, "Playback dispatch queue overflow; aborting response");
+            Schedule([this]() { AbortSpeaking(kAbortReasonNone); });
+            return;
         }
+        auto holder = std::make_shared<std::unique_ptr<AudioStreamPacket>>(std::move(packet));
+        Schedule([this, holder]() {
+            pending_playback_packets_.fetch_sub(1);
+            if (!aborted_ && GetDeviceState() == kDeviceStateSpeaking) {
+                if (!audio_service_.PushPacketToDecodeQueue(std::move(*holder))) {
+                    ESP_LOGW(TAG, "Decoder queue overflow; aborting response");
+                    AbortSpeaking(kAbortReasonNone);
+                }
+            }
+        });
     });
 
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
@@ -570,6 +590,9 @@ void Application::InitializeProtocol() {
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+            aborted_ = true;
+            pending_playback_stop_ = false;
+            audio_service_.ResetDecoder();
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
@@ -623,12 +646,28 @@ void Application::InitializeProtocol() {
             }
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
+                    pending_playback_stop_ = false;
+                    audio_service_.ResetDecoder();
                     aborted_ = false;
                     SetDeviceState(kDeviceStateSpeaking);
+                });
+            } else if (strcmp(state->valuestring, "abort") == 0) {
+                Schedule([this]() {
+                    aborted_ = true;
+                    pending_playback_stop_ = false;
+                    audio_service_.ResetDecoder();
+                    if (GetDeviceState() == kDeviceStateSpeaking) {
+                        SetDeviceState(listening_mode_ == kListeningModeManualStop
+                                           ? kDeviceStateIdle : kDeviceStateListening);
+                    }
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     if (GetDeviceState() == kDeviceStateSpeaking) {
+                        if (!audio_service_.IsPlaybackIdle()) {
+                            pending_playback_stop_ = true;
+                            return;
+                        }
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -1025,7 +1064,11 @@ void Application::HandleStateChangedEvent() {
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
+#ifdef CONFIG_PICO_FULL_DUPLEX
+            display->SetStatus(Lang::Strings::INTERACTING);
+#else
             display->SetStatus(Lang::Strings::LISTENING);
+#endif
             display->SetEmotion("neutral");
 
             // Make sure the audio processor is running
@@ -1044,17 +1087,26 @@ void Application::HandleStateChangedEvent() {
             }
             break;
         case kDeviceStateSpeaking:
+#ifdef CONFIG_PICO_FULL_DUPLEX
+            display->SetStatus(Lang::Strings::INTERACTING);
+#else
             display->SetStatus(Lang::Strings::SPEAKING);
+#endif
 
             if (listening_mode_ != kListeningModeRealtime) {
                 audio_service_.EnableVoiceProcessing(false);
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             }
-            audio_service_.ResetDecoder();
+            // Decoder reset belongs to ordered TTS START, not this deferred
+            // state event (which can run after the first packet).
             break;
         case kDeviceStateNotifying:
+#ifdef CONFIG_PICO_FULL_DUPLEX
+            display->SetStatus(Lang::Strings::INTERACTING);
+#else
             display->SetStatus(Lang::Strings::SPEAKING);
+#endif
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             break;
@@ -1175,6 +1227,8 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    pending_playback_stop_ = false;
+    audio_service_.ResetDecoder();
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
@@ -1186,7 +1240,11 @@ void Application::SetListeningMode(ListeningMode mode) {
 }
 
 ListeningMode Application::GetDefaultListeningMode() const {
+#ifdef CONFIG_PICO_FULL_DUPLEX
+    return kListeningModeRealtime;
+#else
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
+#endif
 }
 
 void Application::Reboot() {

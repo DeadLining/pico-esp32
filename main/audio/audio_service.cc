@@ -332,6 +332,7 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
+        const uint32_t generation = playback_generation_.load();
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
         output_in_flight_ = true;
@@ -348,7 +349,11 @@ void AudioService::AudioOutputTask() {
             callbacks_.on_playback_progress(task.playback_id, task.media_position_ms);
         }
 
-        codec_->OutputData(task.pcm);
+        // Hardware may finish the current DMA fragment, but never enqueue a
+        // popped old reply after an abort/reset. Output remains single-writer.
+        if (generation == playback_generation_.load()) {
+            codec_->OutputData(task.pcm);
+        }
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
@@ -406,9 +411,15 @@ void AudioService::OpusCodecTask() {
             task.playback_id = packet->playback_id;
             task.media_position_ms = packet->media_position_ms;
 
-            SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
+            // Serialize reconfiguration, decode and resampling with reset.
+            // Check the epoch after taking the lock: an old packet must not
+            // mutate the freshly reset Opus state even if its PCM is discarded.
+            std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
             bool decoded = false;
-            if (opus_decoder_ != nullptr) {
+            if (generation == playback_generation_.load()) {
+                SetDecodeSampleRate(packet->sample_rate, packet->frame_duration);
+            }
+            if (generation == playback_generation_.load() && opus_decoder_ != nullptr) {
                 task.pcm.resize(decoder_frame_size_);
                 esp_audio_dec_in_raw_t raw = {
                     .buffer = (uint8_t*)(packet->payload.data()),
@@ -422,9 +433,7 @@ void AudioService::OpusCodecTask() {
                     .decoded_size = 0,
                 };
                 esp_audio_dec_info_t dec_info = {};
-                std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
                 auto ret = esp_opus_dec_decode(opus_decoder_, &raw, &out_frame, &dec_info);
-                decoder_lock.unlock();
                 if (ret == ESP_AUDIO_ERR_OK) {
                     task.pcm.resize(out_frame.decoded_size / sizeof(int16_t));
                     if (decoder_sample_rate_ != codec_->output_sample_rate() &&
@@ -444,9 +453,10 @@ void AudioService::OpusCodecTask() {
                 } else {
                     ESP_LOGE(TAG, "Failed to decode audio after resize, error code: %d", ret);
                 }
-            } else {
+            } else if (generation == playback_generation_.load()) {
                 ESP_LOGE(TAG, "Audio decoder is not configured");
             }
+            decoder_lock.unlock();
 
             lock.lock();
             if (decoded && generation == playback_generation_ && !service_stopped_.load()) {
@@ -530,15 +540,14 @@ void AudioService::OpusCodecTask() {
 }
 
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
+    // Caller holds decoder_mutex_ through configuration and decode.
     if (decoder_sample_rate_ == sample_rate && decoder_duration_ms_ == frame_duration) {
         return;
     }
-    std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
     if (opus_decoder_ != nullptr) {
         esp_opus_dec_close(opus_decoder_);
         opus_decoder_ = nullptr;
     }
-    decoder_lock.unlock();
     esp_opus_dec_cfg_t opus_dec_cfg = OPUS_DEC_CFG(sample_rate, frame_duration);
     auto ret = esp_opus_dec_open(&opus_dec_cfg, sizeof(esp_opus_dec_cfg_t), &opus_decoder_);
     if (opus_decoder_ == nullptr) {
@@ -803,6 +812,9 @@ void AudioService::ResetDecoder() {
         std::unique_lock<std::mutex> decoder_lock(decoder_mutex_);
         if (opus_decoder_ != nullptr) {
             esp_opus_dec_reset(opus_decoder_);
+        }
+        if (output_resampler_ != nullptr) {
+            esp_ae_rate_cvt_reset(output_resampler_);
         }
         decoder_lock.unlock();
         timestamp_queue_.clear();

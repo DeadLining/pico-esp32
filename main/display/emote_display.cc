@@ -166,7 +166,8 @@ void EmoteDisplay::SetStatus(const char* const status) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_LISTEN, NULL);
         } else if (std::strcmp(status, Lang::Strings::STANDBY) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_IDLE, NULL);
-        } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0) {
+        } else if (std::strcmp(status, Lang::Strings::SPEAKING) == 0 ||
+                   std::strcmp(status, Lang::Strings::INTERACTING) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SPEAK, NULL);
         } else if (std::strcmp(status, Lang::Strings::ERROR) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_SET, NULL);

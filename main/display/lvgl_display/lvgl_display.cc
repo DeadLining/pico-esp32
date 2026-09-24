@@ -240,7 +240,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
     bool charging, discharging;
     const char* icon = nullptr;
     if (board.GetBatteryLevel(battery_level, charging, discharging)) {
-        if (charging) {
+        if (charging && !battery_charging_color_enabled_) {
             icon = MATERIAL_SYMBOLS_BATTERY_ANDROID_FRAME_BOLT;
         } else {
             const char* levels[] = {
@@ -264,6 +264,29 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             lv_label_set_text(battery_label_, battery_icon_);
         }
 
+        if (battery_label_ != nullptr && battery_charging_color_enabled_ && current_theme_) {
+            auto* theme = static_cast<LvglTheme*>(current_theme_);
+            lv_obj_set_style_text_color(battery_label_,
+                charging ? lv_color_hex(battery_charging_color_) : theme->text_color(), 0);
+        }
+
+        if (battery_percentage_enabled_ && battery_label_) {
+            if (!battery_percentage_label_) {
+                // Use a separate text label: the battery icon font has no digits.
+                // Compact digits independent of the larger chat font. Color still
+                // inherits from the parent, preserving light/dark theme behavior.
+                battery_percentage_label_ = lv_label_create(lv_obj_get_parent(battery_label_));
+#if LV_FONT_MONTSERRAT_14
+                lv_obj_set_style_text_font(battery_percentage_label_, &lv_font_montserrat_14, 0);
+#else
+                lv_obj_set_style_text_font(battery_percentage_label_, LV_FONT_DEFAULT, 0);
+#endif
+                lv_obj_set_style_margin_left(battery_percentage_label_, 3, 0);
+            }
+            const int percent = battery_level < 0 ? 0 : (battery_level > 100 ? 100 : battery_level);
+            lv_label_set_text_fmt(battery_percentage_label_, "%d", percent);
+        }
+
         // Check low battery popup only when clock tick event is triggered
         // Because when initializing, the battery level is not ready yet.
         if (low_battery_popup_ != nullptr && !update_all) {
@@ -280,6 +303,16 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
                     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
                 }
             }
+        }
+    } else {
+        DisplayLockGuard lock(this);
+        if (battery_percentage_label_) {
+            lv_label_set_text(battery_percentage_label_, "--");
+        }
+        // A failed gauge read must not leave a stale green charging indication.
+        if (battery_charging_color_enabled_ && battery_label_ && current_theme_) {
+            auto* theme = static_cast<LvglTheme*>(current_theme_);
+            lv_obj_set_style_text_color(battery_label_, theme->text_color(), 0);
         }
     }
 

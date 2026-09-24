@@ -40,6 +40,20 @@ class FirmwareBuilderHistoryTest(unittest.TestCase):
         self.out.mkdir()
         self.server = load(self.root, self.out)
 
+    def test_clean_compile_workspace_preserves_history_and_components(self):
+        build = self.root / 'build'
+        build.mkdir()
+        (build / 'stale.obj').write_bytes(b'compiled before a backdated source copy')
+        components = self.root / 'managed_components'
+        components.mkdir()
+        (components / 'keep').write_text('dependency cache')
+        (self.out / 'keep.bin').write_bytes(b'firmware history')
+        self.server.clean_compile_workspace()
+        self.assertFalse(build.exists())
+        self.assertTrue((components / 'keep').exists())
+        self.assertTrue((self.out / 'keep.bin').exists())
+        self.server.clean_compile_workspace()  # already clean is harmless
+
     def _new_job(self, body):
         key = self.server.cache_key(body)
         jid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'

@@ -5,6 +5,7 @@
     "strings": {
         "WARNING": "Warning",
         "INFO": "Information",
+        "INTERACTING": "Interacting",
         "ERROR": "Error",
         "VERSION": "Ver ",
         "LOADING_PROTOCOL": "Logging in...",

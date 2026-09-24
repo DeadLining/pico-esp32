@@ -416,3 +416,13 @@ The MQTT + UDP hybrid protocol achieves efficient audio communication through:
 - **Performance** - UDP keeps audio latency low.
 
 The protocol is a good fit for low-latency voice interaction, at the cost of higher network complexity than pure WebSocket.
+
+### Pico playback cancellation
+
+The common application also recognizes `{"type":"tts","state":"abort"}` on
+MQTT: clear pending playback and reset the decoder, without sending a cancel echo.
+`tts.stop` drains normally. Unlike WebSocket, MQTT control and UDP audio do not
+share one ordered transport. UDP packets do not carry a response generation, so
+late old-response packets after a replacement start cannot be distinguished by
+this extension alone. Pico full-duplex is supported on WebSocket; do not assume
+cross-transport MQTT/UDP interruption isolation without a versioned packet ID.

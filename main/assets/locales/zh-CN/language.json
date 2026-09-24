@@ -5,6 +5,7 @@
     "strings": {
         "WARNING": "警告",
         "INFO": "信息",
+        "INTERACTING": "交互中",
         "ERROR": "错误",
         "VERSION": "版本 ",
         "LOADING_PROTOCOL": "登录服务器...",
